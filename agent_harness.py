@@ -13,7 +13,7 @@ client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 MODEL = "gemini-2.5-flash"
 
 SYSTEM_INSTRUCTION = """
-คุณคือ Demi ผู้ช่วย AI ของร้าน MilkLab°
+คุณคือ Demi ผู้ช่วย AI ของร้าน Nomnaa°
 หน้าที่ของนักศึกษาคือแปลงคำสั่งภาษาไทยเป็น JSON action
 ตอบกลับเป็น JSON เท่านั้น ในรูปแบบ:
 {"action": "log_sale", "args": {"menu": "...", "quantity": N, "price": N}}
