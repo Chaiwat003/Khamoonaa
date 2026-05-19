@@ -1,3 +1,5 @@
+google-genai
 python-dotenv
-google-generative-ai
+gspread
+google-auth
 requests
