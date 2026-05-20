@@ -8,6 +8,9 @@ import pandas as pd
 import requests
 from datetime import datetime
 
+# Set browser tab title and icon (must be called before other Streamlit calls)
+st.set_page_config(page_title="น้องขาหมู — Khamoonaa", page_icon="🐷")
+
 from rag_engine import RAGEngine
 from sheets_client import get_sheet
 import threading
@@ -226,36 +229,47 @@ def send_message_with_done_button(lines: list, bot_token: str, chat_id: str, ord
     payload = {"chat_id": clean_chat_id, "text": "\n".join(lines), "reply_markup": reply_markup}
     url = f"https://api.telegram.org/bot{clean_token}/sendMessage"
     
-    # 2. เพิ่มระบบลองส่งใหม่ (Retry) สูงสุด 3 ครั้ง ป้องกันปัญหาเน็ตหลุด
-    for attempt in range(3):
+    # 2. เพิ่มระบบลองส่งใหม่ (Retry) พร้อม exponential backoff
+    max_attempts = 3
+    for attempt in range(max_attempts):
         try:
-            resp = requests.post(url, json=payload, timeout=15)
-            
+            # increase timeout to reduce Read timed out errors
+            resp = requests.post(url, json=payload, timeout=30)
+
             if not resp.ok:
-                return f"Telegram API Error: {resp.text}"
-                
-            resj = resp.json()
+                # return detailed API error (status + body) for debugging
+                return f"Telegram API Error: {resp.status_code}: {resp.text}"
+
+            # ensure we can parse JSON and extract message_id
+            try:
+                resj = resp.json()
+            except Exception:
+                return f"Telegram API Error: unable to parse JSON response: {resp.text}"
+
             msg_id = resj.get("result", {}).get("message_id")
-            
+            if not msg_id:
+                return f"Telegram API Error: missing message_id in response: {resj}"
+
             pending_callbacks[token] = {
-                "timestamp": order_timestamp, 
-                "message_id": msg_id, 
-                "chat_id": clean_chat_id, 
-                "text": "\n".join(lines)
+                "timestamp": order_timestamp,
+                "message_id": msg_id,
+                "chat_id": clean_chat_id,
+                "text": "\n".join(lines),
             }
-            
+
             if listener_thread is None or not listener_thread.is_alive():
                 listener_thread = threading.Thread(target=_telegram_update_poller, args=(clean_token,), daemon=True)
                 listener_thread.start()
-                
+
             return True
-            
-        # ถ้าจับ Error เรื่องเครือข่าย (SSLError, ConnectionError) ได้ ให้ลองใหม่
+
         except requests.exceptions.RequestException as e:
-            if attempt == 2: # ถ้าลองครบ 3 ครั้งแล้วยังพังอยู่ ถึงจะยอมแพ้
+            # exponential backoff between attempts
+            if attempt == max_attempts - 1:
                 return f"Network Error: {str(e)}"
-            time.sleep(2) # รอ 2 วินาทีแล้วลองยิงใหม่
-            
+            backoff = 2 ** attempt
+            time.sleep(backoff)
+
         except Exception as e:
             return f"System Error: {str(e)}"
 
