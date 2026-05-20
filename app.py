@@ -218,28 +218,46 @@ def send_message_with_done_button(lines: list, bot_token: str, chat_id: str, ord
     global pending_callbacks, listener_thread
     token = str(uuid.uuid4())
     
-    # แก้ไข 1: ส่งเป็น Dictionary ธรรมดา ไม่ต้องใช้ json.dumps() แล้ว
-    reply_markup = {"inline_keyboard": [[{"text": "เสร็จแล้ว", "callback_data": token}]]}
-    payload = {"chat_id": chat_id, "text": "\n".join(lines), "reply_markup": reply_markup}
+    # 1. ทำความสะอาด Token และ Chat ID เพื่อลบช่องว่างหรือบรรทัดใหม่ที่มองไม่เห็น
+    clean_token = bot_token.strip()
+    clean_chat_id = chat_id.strip()
     
-    try:
-        # แก้ไข 2: เปลี่ยนจาก data=payload เป็น json=payload ตามมาตรฐาน API
-        resp = requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json=payload)
-        
-        # ถ้ายิง API ไม่สำเร็จ ให้คืนค่าข้อความ Error จาก Telegram กลับไปโชว์
-        if not resp.ok:
-            return f"Telegram API Error: {resp.text}"
+    reply_markup = {"inline_keyboard": [[{"text": "เสร็จแล้ว", "callback_data": token}]]}
+    payload = {"chat_id": clean_chat_id, "text": "\n".join(lines), "reply_markup": reply_markup}
+    url = f"https://api.telegram.org/bot{clean_token}/sendMessage"
+    
+    # 2. เพิ่มระบบลองส่งใหม่ (Retry) สูงสุด 3 ครั้ง ป้องกันปัญหาเน็ตหลุด
+    for attempt in range(3):
+        try:
+            resp = requests.post(url, json=payload, timeout=15)
             
-        resj = resp.json()
-        msg_id = resj.get("result", {}).get("message_id")
-        pending_callbacks[token] = {"timestamp": order_timestamp, "message_id": msg_id, "chat_id": chat_id, "text": "\n".join(lines)}
-        
-        if listener_thread is None or not listener_thread.is_alive():
-            listener_thread = threading.Thread(target=_telegram_update_poller, args=(bot_token,), daemon=True)
-            listener_thread.start()
-        return True
-    except Exception as e:
-        return f"System Error: {str(e)}"
+            if not resp.ok:
+                return f"Telegram API Error: {resp.text}"
+                
+            resj = resp.json()
+            msg_id = resj.get("result", {}).get("message_id")
+            
+            pending_callbacks[token] = {
+                "timestamp": order_timestamp, 
+                "message_id": msg_id, 
+                "chat_id": clean_chat_id, 
+                "text": "\n".join(lines)
+            }
+            
+            if listener_thread is None or not listener_thread.is_alive():
+                listener_thread = threading.Thread(target=_telegram_update_poller, args=(clean_token,), daemon=True)
+                listener_thread.start()
+                
+            return True
+            
+        # ถ้าจับ Error เรื่องเครือข่าย (SSLError, ConnectionError) ได้ ให้ลองใหม่
+        except requests.exceptions.RequestException as e:
+            if attempt == 2: # ถ้าลองครบ 3 ครั้งแล้วยังพังอยู่ ถึงจะยอมแพ้
+                return f"Network Error: {str(e)}"
+            time.sleep(2) # รอ 2 วินาทีแล้วลองยิงใหม่
+            
+        except Exception as e:
+            return f"System Error: {str(e)}"
 
 with st.expander("สั่งอาหาร (Place an order)"):
     # interactive controls (not inside a Streamlit form) so price updates immediately
