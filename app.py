@@ -257,52 +257,29 @@ def send_message_with_done_button(lines: list, bot_token: str, chat_id: str, ord
     global pending_callbacks, listener_thread
     token = str(uuid.uuid4())
     
-    # 1. ทำความสะอาด Token และ Chat ID เพื่อลบช่องว่างหรือบรรทัดใหม่ที่มองไม่เห็น
+    # 1. ทำความสะอาด Token และ Chat ID
     clean_token = bot_token.strip()
     clean_chat_id = chat_id.strip()
     
     reply_markup = {"inline_keyboard": [[{"text": "เสร็จแล้ว", "callback_data": token}]]}
-    payload = {"chat_id": chat_id, "text": "\n".join(lines), "reply_markup": json.dumps(reply_markup)}
-    try:
-        resp = requests.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", data=payload, timeout=10)
-        try:
-            logger.info("sendMessage resp: %s %s", resp.status_code, resp.text)
-        except Exception:
-            pass
-        if not resp.ok:
-            return False
-        try:
-            resj = resp.json()
-        except Exception:
-            logger.exception("failed to parse sendMessage response JSON")
-            return False
-        msg_id = resj.get("result", {}).get("message_id")
-        pending_callbacks[token] = {"timestamp": order_timestamp, "message_id": msg_id, "chat_id": chat_id, "text": "\n".join(lines)}
-        logger.info("registered pending callback token=%s msg_id=%s", token, msg_id)
-        # start listener thread once
-        if listener_thread is None or not listener_thread.is_alive():
-            listener_thread = threading.Thread(target=_telegram_update_poller, args=(bot_token,), daemon=True)
-            listener_thread.start()
-            logger.info("started telegram listener thread")
-        return True
-    except Exception:
-        logger.exception("send_message_with_done_button failed")
-        return False
     payload = {"chat_id": clean_chat_id, "text": "\n".join(lines), "reply_markup": reply_markup}
     url = f"https://api.telegram.org/bot{clean_token}/sendMessage"
     
-    # 2. เพิ่มระบบลองส่งใหม่ (Retry) พร้อม exponential backoff
+    # 2. ระบบลองส่งใหม่ (Retry) สูงสุด 3 ครั้งเมื่อเน็ตหลุด
     max_attempts = 3
     for attempt in range(max_attempts):
         try:
-            # increase timeout to reduce Read timed out errors
+            # ขยายเวลาเป็น 30 วินาที
             resp = requests.post(url, json=payload, timeout=30)
+            
+            try:
+                logger.info("sendMessage resp: %s %s", resp.status_code, resp.text)
+            except Exception:
+                pass
 
             if not resp.ok:
-                # return detailed API error (status + body) for debugging
                 return f"Telegram API Error: {resp.status_code}: {resp.text}"
 
-            # ensure we can parse JSON and extract message_id
             try:
                 resj = resp.json()
             except Exception:
@@ -326,7 +303,7 @@ def send_message_with_done_button(lines: list, bot_token: str, chat_id: str, ord
             return True
 
         except requests.exceptions.RequestException as e:
-            # exponential backoff between attempts
+            # รอเวลาเพิ่มขึ้นเรื่อยๆ แล้วลองใหม่ (Exponential backoff)
             if attempt == max_attempts - 1:
                 return f"Network Error: {str(e)}"
             backoff = 2 ** attempt
